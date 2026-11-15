@@ -1,0 +1,135 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Pretendard', 'Apple SD Gothic Neo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --color-ink: #1c2330;
+  --color-muted: #667085;
+  --color-line: #d9dee7;
+  --color-canvas: #f4f6f9;
+  --color-accent: #2f5fd0;
+  --color-pk: #b45309;
+  --color-fk: #2f5fd0;
+  --color-onto: #0f766e;
+  --color-onto-soft: #dff2ef;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+/* 엣지 연결점은 위치만 잡고 보이지 않게 한다 (사용자가 직접 연결하지 않는다) */
+.react-flow__handle.erd-handle {
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.react-flow__edge-textbg {
+  fill: var(--color-canvas);
+}
+
+/* 새로 만들어진 클래스가 나타나는 효과 */
+@keyframes node-in {
+  from {
+    opacity: 0;
+    scale: 0.85;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+.react-flow__node.node-enter {
+  animation: node-in 0.4s ease-out;
+}
+/* 생성 중 미리보기: 다시 배치될 때 부드럽게 이동 */
+.gen-anim .react-flow__node {
+  transition: transform 0.45s ease;
+}
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 9999px;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+/* 질의 경로: 지금 단계에서 쓰인 노드가 빛난다 */
+@keyframes trace-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgb(217 119 6 / 0.55), 0 0 18px 4px rgb(217 119 6 / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgb(217 119 6 / 0.25), 0 0 28px 8px rgb(217 119 6 / 0.18);
+  }
+}
+@keyframes trace-glow-onto {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgb(15 118 110 / 0.55), 0 0 18px 4px rgb(15 118 110 / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgb(15 118 110 / 0.25), 0 0 28px 8px rgb(15 118 110 / 0.18);
+  }
+}
+.trace-glow {
+  animation: trace-glow 1.6s ease-in-out infinite;
+}
+.trace-glow.trace-glow-onto {
+  animation-name: trace-glow-onto;
+}
+/* 따라간 관계: 차례로 나타난다 (animationDelay 는 엣지마다 지정) */
+@keyframes trace-edge-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.react-flow__edge.trace-edge .react-flow__edge-path {
+  animation: dashdraw 0.5s linear infinite, trace-edge-in 0.6s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .trace-glow,
+  .react-flow__edge.trace-edge .react-flow__edge-path {
+    animation: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node.node-enter,
+  .gen-anim .react-flow__node {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* 좁은 창에서 상단 바는 가로로 밀 수 있지만 스크롤 막대는 숨긴다 */
+header {
+  scrollbar-width: none;
+}
+header::-webkit-scrollbar {
+  display: none;
+}

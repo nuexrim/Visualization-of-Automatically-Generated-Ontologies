@@ -1,0 +1,11 @@
+.env
+.local/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+.pytest_cache/
+.DS_Store
+data/ontologies/
+data/runs/
