@@ -141,3 +141,27 @@ def test_diff_unit():
     items = {i["name"]: i for i in edit.diff(a, b)}
     assert items["ont:X"]["status"] == "changed" and items["ont:Y"]["status"] == "added"
     assert items["ont:X"]["removed"] == [["rdfs:label", '"x"']]
+
+
+def test_work_survives_restart(client):
+    """저장하지 않은 수정과 되돌리기 기록은 백엔드를 다시 시작해도 남는다 (data/ontologies/<db>/_work/)."""
+    iri = ONT + "Film"
+    patch(client, {"op": "set_label", "iri": iri, "value": "Movie"})
+    patch(client, {"op": "set_comment", "iri": iri, "value": "A movie."})
+    client.post(f"/api/dbs/{DB}/ontology/undo").raise_for_status()
+    assert len(list((store.ROOT / DB / "_work").glob("*.ttl"))) == 3  # 원본·수정 1·수정 2
+
+    store._work.clear()  # 재시작 흉내
+    view = client.get(f"/api/dbs/{DB}/ontology").json()
+    assert next(c for c in view["classes"] if c["iri"] == iri)["label"] == "Movie"
+    assert view["history"] == {"can_undo": True, "can_redo": True, "changes": 1, "undo_label": "ont:Film 라벨 수정", "redo_label": "ont:Film 설명 수정"}
+    # 에이전트가 읽는 그래프도 기록에서 되살린 작업본
+    assert run_ontology_sparql(store.current_graph(DB), f'SELECT ?l WHERE {{ <{iri}> rdfs:label ?l }}').text.count("Movie") == 1
+
+    store._work.clear()
+    client.post(f"/api/dbs/{DB}/ontology/undo").raise_for_status()
+    assert client.get(f"/api/dbs/{DB}/ontology").json()["history"]["changes"] == 0
+
+    # 다른 파일을 불러오면 기록은 지워진다
+    client.post(f"/api/dbs/{DB}/ontology/load", json={"filename": client.origin}).raise_for_status()
+    assert not (store.ROOT / DB / "_work").exists()

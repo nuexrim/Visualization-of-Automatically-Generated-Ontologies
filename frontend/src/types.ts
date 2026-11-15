@@ -244,7 +244,7 @@ export interface Viz {
   data_properties?: string[]
   tables?: string[]
   columns?: { table: string; column: string }[]
-  joins?: { left_table: string; left_column: string; right_table: string; right_column: string; fk: { table: string; column: string } | null }[]
+  joins?: { left_table: string; left_column: string; right_table: string; right_column: string; fk: { table: string; column: string } | null; via?: 'join' | 'subquery' }[]
 }
 
 export type ToolName = 'ontology_query' | 'sql_query'

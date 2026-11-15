@@ -81,9 +81,15 @@ def test_sql_join_path(movie):
     path = tools.sql_join_path(sql, schema)
     assert path["tables"] == ["rental", "inventory", "customer", "film"]
     assert {"left_table": "rental", "left_column": "inventory_id", "right_table": "inventory", "right_column": "inventory_id",
-            "fk": {"table": "rental", "column": "inventory_id"}} in path["joins"]
+            "fk": {"table": "rental", "column": "inventory_id"}, "via": "join"} in path["joins"]
     assert any(j["fk"] == {"table": "rental", "column": "customer_id"} for j in path["joins"])
     assert {"table": "film", "column": "title"} in path["columns"]
+    # IN 하위 질의도 두 테이블을 잇는 경로로 본다 (inventory.film_id → film.film_id 외래 키)
+    assert {"left_table": "inventory", "left_column": "film_id", "right_table": "film", "right_column": "film_id",
+            "fk": {"table": "inventory", "column": "film_id"}, "via": "subquery"} in path["joins"]
+    # 상관 하위 질의가 바깥 테이블을 참조하는 경우
+    corr = tools.sql_join_path("SELECT f.title FROM film f WHERE EXISTS (SELECT 1 FROM film_actor fa WHERE fa.film_id = f.film_id)", schema)
+    assert [(j["left_table"], j["right_table"], j["via"]) for j in corr["joins"]] == [("film_actor", "film", "subquery")]
     assert tools.sql_join_path("not sql at all (", schema) == {"tables": [], "joins": [], "columns": []}
 
 

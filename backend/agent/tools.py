@@ -147,8 +147,9 @@ def run_sql(db: str, query: str) -> ToolResult:
 def sql_join_path(query: str, schema: dict) -> dict:
     """SQL의 FROM/JOIN 테이블과 조인 조건을 뽑아 ERD 위에 그릴 수 있게 한다.
 
-    돌려주는 값: {tables: [...], joins: [{left_table, left_column, right_table, right_column, fk}], columns: [{table, column}]}
+    돌려주는 값: {tables: [...], joins: [{left_table, left_column, right_table, right_column, fk, via}], columns: [{table, column}]}
     fk 는 그 조인이 실제 외래 키와 일치할 때 {table, column} (외래 키를 가진 쪽).
+    via 는 "join"(FROM/JOIN, WHERE 의 같음 조건) 또는 "subquery"(IN 하위 질의, 상관 하위 질의의 바깥 참조).
     """
     out: dict = {"tables": [], "joins": [], "columns": []}
     try:
@@ -164,9 +165,10 @@ def sql_join_path(query: str, schema: dict) -> dict:
                 return c["name"]
         return None
 
-    seen_cols: set[tuple[str, str]] = set()
-    for select in tree.find_all(exp.Select):
-        # 이 SELECT 의 FROM/JOIN 에 직접 나온 테이블만 (별칭 → 실제 이름)
+    # SELECT 마다 FROM/JOIN 에 직접 나온 테이블 (별칭 → 실제 이름)
+    aliases: dict[int, dict[str, str]] = {}
+    selects = list(tree.find_all(exp.Select))
+    for select in selects:
         alias: dict[str, str] = {}
         sources = [select.args.get("from") or select.args.get("from_")] + list(select.args.get("joins") or [])  # sqlglot 버전에 따라 키 이름이 다르다
         for src in sources:
@@ -178,42 +180,75 @@ def sql_join_path(query: str, schema: dict) -> dict:
                 alias[(t.alias or t.name).lower()] = real
                 if real not in out["tables"]:
                     out["tables"].append(real)
+        aliases[id(select)] = alias
 
-        def resolve(col: exp.Column) -> tuple[str, str] | None:
+    def scopes(select: exp.Select):
+        """이 SELECT 와 그것을 감싼 바깥 SELECT 들 (상관 하위 질의는 바깥 테이블을 참조할 수 있다)."""
+        node = select
+        while node is not None:
+            if isinstance(node, exp.Select):
+                yield aliases.get(id(node), {})
+            node = node.parent
+
+    def resolve(col: exp.Column, select: exp.Select) -> tuple[str, str] | None:
+        for alias in scopes(select):
             if col.table:
                 table = alias.get(col.table.lower())
-                candidates = [table] if table else []
-            else:
-                candidates = list(dict.fromkeys(alias.values()))
-            hits = [(t, real_column(t, col.name)) for t in candidates]
+                if table:
+                    c = real_column(table, col.name)
+                    return (table, c) if c else None
+                continue
+            hits = [(t, real_column(t, col.name)) for t in dict.fromkeys(alias.values())]
             hits = [(t, c) for t, c in hits if c]
-            return hits[0] if len(hits) == 1 else None
+            if len(hits) == 1:
+                return hits[0]
+            if hits:  # 같은 범위에서 애매하면 포기
+                return None
+        return None
 
+    def add_join(a, b, via: str) -> None:
+        if not a or not b or a[0] == b[0]:
+            return
+        fk = None
+        if (a[0], a[1], b[0], b[1]) in fks:
+            fk = {"table": a[0], "column": a[1]}
+        elif (b[0], b[1], a[0], a[1]) in fks:
+            fk = {"table": b[0], "column": b[1]}
+        join = {"left_table": a[0], "left_column": a[1], "right_table": b[0], "right_column": b[1], "fk": fk, "via": via}
+        same = lambda j: all(j[k] == join[k] for k in ("left_table", "left_column", "right_table", "right_column"))  # noqa: E731
+        if not any(same(j) for j in out["joins"]):
+            out["joins"].append(join)
+
+    seen_cols: set[tuple[str, str]] = set()
+    for select in selects:
+        own = aliases[id(select)]
         for col in select.find_all(exp.Column):
             if col.find_ancestor(exp.Select) is not select:
                 continue
-            r = resolve(col)
+            r = resolve(col, select)
             if r and r not in seen_cols:
                 seen_cols.add(r)
                 out["columns"].append({"table": r[0], "column": r[1]})
 
-        # 조인 조건: ON 절과 WHERE 절의 "컬럼 = 컬럼"
+        # 조인 조건: ON 절과 WHERE 절의 "컬럼 = 컬럼" (상관 하위 질의가 바깥 테이블을 참조하는 경우 포함)
         for eq in select.find_all(exp.EQ):
             if eq.find_ancestor(exp.Select) is not select:
                 continue
-            if not (isinstance(eq.left, exp.Column) and isinstance(eq.right, exp.Column)):
+            if isinstance(eq.left, exp.Column) and isinstance(eq.right, exp.Column):
+                outer = any(c.table and c.table.lower() not in own for c in (eq.left, eq.right))
+                add_join(resolve(eq.left, select), resolve(eq.right, select), "subquery" if outer else "join")
+
+        # 하위 질의로 이어진 테이블: 컬럼 IN (SELECT 컬럼 FROM ...)
+        for cond in select.find_all(exp.In):
+            if cond.find_ancestor(exp.Select) is not select:
                 continue
-            a, b = resolve(eq.left), resolve(eq.right)
-            if not a or not b or a[0] == b[0]:
+            sub = cond.args.get("query")
+            inner = sub.this if isinstance(sub, exp.Subquery) else sub
+            if not isinstance(cond.this, exp.Column) or not isinstance(inner, exp.Select) or len(inner.expressions) != 1:
                 continue
-            fk = None
-            if (a[0], a[1], b[0], b[1]) in fks:
-                fk = {"table": a[0], "column": a[1]}
-            elif (b[0], b[1], a[0], a[1]) in fks:
-                fk = {"table": b[0], "column": b[1]}
-            join = {"left_table": a[0], "left_column": a[1], "right_table": b[0], "right_column": b[1], "fk": fk}
-            if join not in out["joins"]:
-                out["joins"].append(join)
+            target = inner.expressions[0].unalias()
+            if isinstance(target, exp.Column):
+                add_join(resolve(cond.this, select), resolve(target, inner), "subquery")
     return out
 
 

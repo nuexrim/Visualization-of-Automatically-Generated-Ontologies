@@ -26,6 +26,7 @@ services:
     environment:
       PGHOST: db
       PGPORT: "5432"
+      TZ: ${TZ:-Asia/Seoul}  # 온톨로지·기록 파일 이름의 시각을 한국 시간으로
     volumes:
       - ./data:/app/data
     ports:

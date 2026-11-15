@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -128,13 +130,13 @@ def load(db: str, filename: str) -> dict:
     """파일을 '불러온' 상태로 만든다. 이후 화면과 에이전트가 이 온톨로지를 쓴다."""
     path = _path(db, filename)
     _state_path(db).write_text(json.dumps({"current": path.name}), encoding="utf-8")
-    _work.pop(db, None)
+    _drop_work(db)
     return _info(db, path)
 
 
 def unload(db: str) -> None:
     _state_path(db).unlink(missing_ok=True)
-    _work.pop(db, None)
+    _drop_work(db)
 
 
 def file_info(db: str, filename: str) -> dict:
@@ -147,9 +149,11 @@ def file_graph(db: str, filename: str) -> Graph:
 
 # ---------------------------------------------------------------- 사람이 수정하는 작업본
 #
-# 불러온 파일은 그대로 두고, 수정은 메모리의 작업본에 한다. 화면과 에이전트는 작업본을 읽으므로
+# 불러온 파일은 그대로 두고, 수정은 작업본에 한다. 화면과 에이전트는 작업본을 읽으므로
 # 수정 내용이 다음 질의부터 바로 반영된다. "저장"하면 작업본을 새 버전 파일로 남긴다.
 # 그래프는 바꾸지 않고 통째로 갈아 끼운다 (에이전트가 읽는 중인 그래프가 바뀌지 않게).
+# 작업본과 되돌리기 기록은 data/ontologies/<db>/_work/ 에도 남겨, 백엔드를 다시 시작해도 이어진다.
+# (그래프마다 스냅숏 파일 하나 + 순서를 적은 _index.json. 바뀌지 않은 그래프는 다시 쓰지 않는다)
 
 UNDO_LIMIT = 100
 
@@ -162,6 +166,7 @@ class Work:
     redo: list[tuple[Graph, str]] = field(default_factory=list)
     saved: Graph | None = None   # 파일과 같은 상태의 그래프 (불러올 때·저장할 때)
     saved_depth: int = 0         # 그때의 되돌리기 기록 길이
+    snapshots: dict[int, tuple[Graph, str]] = field(default_factory=dict)  # id(그래프) → (그래프, 스냅숏 이름)
 
     @property
     def changes(self) -> int:
@@ -184,31 +189,103 @@ def copy_graph(g: Graph) -> Graph:
     return out
 
 
+def _work_dir(db: str) -> Path:
+    return _dir(db) / "_work"
+
+
+def _drop_work(db: str) -> None:
+    with _work_lock:
+        _work.pop(db, None)
+        shutil.rmtree(_work_dir(db), ignore_errors=True)
+
+
+def _persist(db: str, w: Work) -> None:
+    """작업본과 되돌리기 기록을 디스크에 남긴다. _work_lock 을 잡은 채로 부른다."""
+    d = _work_dir(db)
+    d.mkdir(parents=True, exist_ok=True)
+    keep: dict[int, tuple[Graph, str]] = {}
+
+    def key(g: Graph) -> str:
+        k = id(g)
+        if k not in keep:
+            known = w.snapshots.get(k)
+            if known is None or known[0] is not g:
+                name = uuid.uuid4().hex[:12]
+                bind_namespaces(g).serialize(destination=str(d / f"{name}.ttl"), format="turtle")
+                known = (g, name)
+            keep[k] = known
+        return keep[k][1]
+
+    index = {
+        "filename": w.filename,
+        "graph": key(w.graph),
+        "saved": key(w.saved) if w.saved is not None else None,
+        "saved_depth": w.saved_depth,
+        "undo": [[key(g), label] for g, label in w.undo],
+        "redo": [[key(g), label] for g, label in w.redo],
+    }
+    w.snapshots = keep
+    tmp = d / "_index.json.tmp"
+    tmp.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(d / "_index.json")
+    used = {name for _, name in keep.values()}
+    for f in d.glob("*.ttl"):
+        if f.stem not in used:
+            f.unlink(missing_ok=True)
+
+
+def _restore(db: str, filename: str) -> Work | None:
+    """디스크에 남은 작업본을 읽는다. 지금 불러온 파일의 것이 아니거나 망가졌으면 None."""
+    d = _work_dir(db)
+    try:
+        index = json.loads((d / "_index.json").read_text(encoding="utf-8"))
+        if index.get("filename") != filename:
+            return None
+        graphs: dict[str, Graph] = {}
+
+        def get(name: str) -> Graph:
+            if name not in graphs:
+                g = Graph()
+                g.parse(str(d / f"{name}.ttl"), format="turtle")
+                graphs[name] = g
+            return graphs[name]
+
+        w = Work(filename, get(index["graph"]),
+                 undo=[(get(k), label) for k, label in index["undo"]],
+                 redo=[(get(k), label) for k, label in index["redo"]],
+                 saved=get(index["saved"]) if index.get("saved") else None,
+                 saved_depth=int(index.get("saved_depth", 0)))
+        w.snapshots = {id(g): (g, name) for name, g in graphs.items()}
+        return w
+    except Exception:  # noqa: BLE001 - 없거나 망가진 기록은 버리고 파일에서 새로 시작한다
+        return None
+
+
 def work(db: str) -> Work | None:
-    """지금 불러온 파일의 작업본 (없으면 파일에서 만든다). 불러온 파일이 없으면 None."""
+    """지금 불러온 파일의 작업본 (메모리 → 디스크 기록 → 파일 순으로 찾는다). 불러온 파일이 없으면 None."""
     name = current_filename(db)
     if name is None:
         return None
     with _work_lock:
         w = _work.get(db)
         if w is None or w.filename != name:
-            g = copy_graph(_graph(_dir(db) / name))
-            w = _work[db] = Work(name, g, saved=g)
+            w = _restore(db, name)
+            if w is None:
+                shutil.rmtree(_work_dir(db), ignore_errors=True)
+                g = copy_graph(_graph(_dir(db) / name))
+                w = Work(name, g, saved=g)
+            _work[db] = w
         return w
 
 
 def current_graph(db: str) -> Graph | None:
-    name = current_filename(db)
-    if name is None:
-        return None
-    w = _work.get(db)
-    return w.graph if w is not None and w.filename == name else _graph(_dir(db) / name)
+    w = work(db)
+    return w.graph if w is not None else None
 
 
 def history(db: str) -> dict:
-    w = _work.get(db)
-    name = current_filename(db)
-    if w is None or w.filename != name:
+    w = work(db)
+    if w is None:
         return {"can_undo": False, "can_redo": False, "changes": 0, "undo_label": None, "redo_label": None}
     return {"can_undo": bool(w.undo), "can_redo": bool(w.redo), "changes": w.changes,
             "undo_label": w.undo[-1][1] if w.undo else None, "redo_label": w.redo[-1][1] if w.redo else None}
@@ -222,6 +299,7 @@ def commit(db: str, new_graph: Graph, label: str) -> None:
         del w.undo[:-UNDO_LIMIT]
         w.redo.clear()
         w.graph = new_graph
+        _persist(db, w)
 
 
 def undo(db: str) -> bool:
@@ -232,6 +310,7 @@ def undo(db: str) -> bool:
         prev, label = w.undo.pop()
         w.redo.append((w.graph, label))
         w.graph = prev
+        _persist(db, w)
     return True
 
 
@@ -243,6 +322,7 @@ def redo(db: str) -> bool:
         nxt, label = w.redo.pop()
         w.undo.append((w.graph, label))
         w.graph = nxt
+        _persist(db, w)
     return True
 
 
@@ -258,6 +338,7 @@ def save_work(db: str, note: str = "") -> dict:
     with _work_lock:
         w.filename = info["filename"]
         w.saved, w.saved_depth = w.graph, len(w.undo)
+        _persist(db, w)
     info["loaded"] = True
     return info
 

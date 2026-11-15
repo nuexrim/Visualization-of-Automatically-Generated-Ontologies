@@ -123,7 +123,7 @@ function Canvas({ schema, overlay }: { schema: Schema; overlay: boolean }) {
           sourceHandle: `join:source:${leftFirst ? 'r' : 'l'}`,
           targetHandle: `join:target:${leftFirst ? 'l' : 'r'}`,
           type: 'smoothstep',
-          label: `${j.left_table}.${j.left_column} = ${j.right_table}.${j.right_column} (외래 키 아님)`,
+          label: `${j.left_table}.${j.left_column} = ${j.right_table}.${j.right_column} (${j.via === 'subquery' ? '하위 질의, ' : ''}외래 키 아님)`,
           labelStyle: { fontSize: 10, fontFamily: 'ui-monospace, Menlo, monospace', fill: JOIN, fontWeight: 600 },
           labelBgPadding: [4, 2] as [number, number],
           labelBgBorderRadius: 3,
