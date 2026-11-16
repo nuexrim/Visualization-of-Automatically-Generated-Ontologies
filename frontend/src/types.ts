@@ -157,7 +157,8 @@ export interface OntologyFile {
   origin: string
 }
 
-export type ViewMode = 'erd' | 'onto' | 'split' | 'overlay'
+/** erd: DB만 본 ERD · erd-onto: 온톨로지 정보를 덧붙인 ERD · onto: 온톨로지 그래프 · split: ERD와 온톨로지 나란히 */
+export type ViewMode = 'erd' | 'erd-onto' | 'onto' | 'split'
 
 export type Selection =
   | { kind: 'table'; table: string }

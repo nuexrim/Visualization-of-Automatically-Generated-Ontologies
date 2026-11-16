@@ -1,5 +1,6 @@
-import { Background, BackgroundVariant, Controls, MarkerType, MiniMap, ReactFlow, ReactFlowProvider, useNodesState, type Edge } from '@xyflow/react'
-import { useCallback, useMemo } from 'react'
+import { Background, BackgroundVariant, Controls, MarkerType, MiniMap, ReactFlow, ReactFlowProvider, useNodesState, type BuiltInEdge, type Edge } from '@xyflow/react'
+import { useCallback, useMemo, useState } from 'react'
+import { spreadSteps } from './edgeSpread'
 import { useOntologyIndex } from '../links'
 import { useCanvasHighlight } from '../trace'
 import { useTraceCamera } from './useTraceCamera'
@@ -16,6 +17,8 @@ const SUB = '#7c3aed'
 
 function Canvas({ db, ontology }: { db: string; ontology: Ontology }) {
   const select = useStore((s) => s.select)
+  const edgeLabels = useStore((s) => s.edgeLabels)
+  const [hovered, setHovered] = useState<string | null>(null)
   const hl = useCanvasHighlight()
   const idx = useOntologyIndex()
   const [nodes, setNodes, onNodesChange] = useNodesState<ClassNodeType>([])
@@ -93,7 +96,18 @@ function Canvas({ db, ontology }: { db: string; ontology: Ontology }) {
 
   const edges = useMemo<Edge[]>(() => {
     const centerX = new Map(nodes.map((n) => [n.id, n.position.x + CLASS_WIDTH / 2]))
-    const out: Edge[] = []
+    const pos = new Map(nodes.map((n) => [n.id, n.position]))
+    const out: BuiltInEdge[] = []
+    // 세로 구간이 겹치지 않게 선마다 지나갈 길을 나눈다
+    const spread = []
+    for (const p of ontology.object_properties)
+      for (const d of p.domains)
+        for (const r of p.ranges) {
+          if (!centerX.has(d) || !centerX.has(r)) continue
+          const ltr = (centerX.get(d) ?? 0) <= (centerX.get(r) ?? 0)
+          spread.push({ id: `op:${p.iri}:${d}:${r}`, x1: (pos.get(d)?.x ?? 0) + (ltr ? CLASS_WIDTH : 0), x2: (pos.get(r)?.x ?? 0) + (ltr ? 0 : CLASS_WIDTH), y: (pos.get(d)?.y ?? 0) + (outgoing.get(d)?.indexOf(p.iri) ?? 0) * 10 })
+        }
+    const steps = spreadSteps(spread)
     const label = { fontSize: 10, fontFamily: 'ui-monospace, Menlo, monospace' }
     const labelBg = { labelBgPadding: [4, 2] as [number, number], labelBgBorderRadius: 3, labelBgStyle: { fill: '#f4f6f9', fillOpacity: 0.92 } }
 
@@ -104,27 +118,32 @@ function Canvas({ db, ontology }: { db: string; ontology: Ontology }) {
         for (const r of p.ranges) {
           if (!centerX.has(d) || !centerX.has(r)) continue
           const leftToRight = (centerX.get(d) ?? 0) <= (centerX.get(r) ?? 0)
+          const id = `op:${p.iri}:${d}:${r}`
+          const isHovered = hovered === id
           const active = hl.props.has(p.iri) || (hl.focusClass !== null && (hl.focusClass === d || hl.focusClass === r))
           const faded = visible !== null && !active
-          const color = active ? ONTO : EDGE
+          const color = active || isHovered ? ONTO : EDGE
           // 지금 단계에서 따라간 관계: 순서대로 흐르는 애니메이션
           const order = hl.now?.props.has(p.iri) ? hl.propOrder?.get(p.iri) : undefined
+          // 관계 이름은 고른 선, 경로에 쓰인 선, 마우스를 올린 선에만 (또는 "선 이름" 켜기)
+          const showLabel = !faded && (edgeLabels || active || isHovered || order !== undefined)
           out.push({
-            id: `op:${p.iri}:${d}:${r}`,
+            id,
             source: d,
             target: r,
             sourceHandle: outHandle(leftToRight ? 'r' : 'l', i),
             targetHandle: inHandle(leftToRight ? 'l' : 'r'),
             type: 'smoothstep',
+            pathOptions: { stepPosition: steps.get(id) ?? 0.5, borderRadius: 6 },
             data: { kind: 'objprop', iri: p.iri },
-            label: faded ? undefined : p.name,
-            labelStyle: { ...label, fill: active ? ONTO : '#4b635f' },
+            label: showLabel ? p.label || p.name : undefined,
+            labelStyle: { ...label, fontFamily: p.label ? undefined : label.fontFamily, fill: active || isHovered ? ONTO : '#4b635f', fontWeight: active || isHovered ? 600 : 400 },
             ...labelBg,
             markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
             animated: order !== undefined,
             className: order !== undefined ? 'trace-edge' : undefined,
-            style: { stroke: color, strokeWidth: order !== undefined ? 2.75 : active ? 2 : 1.25, opacity: faded ? 0.15 : 1, cursor: 'pointer', ...(order !== undefined ? { animationDelay: `${order * 0.35}s` } : {}) },
-            zIndex: active ? 10 : 0,
+            style: { stroke: color, strokeWidth: order !== undefined ? 2.75 : active || isHovered ? 2.25 : 1.25, opacity: faded ? 0.15 : 1, cursor: 'pointer', ...(order !== undefined ? { animationDelay: `${order * 0.35}s` } : {}) },
+            zIndex: active || isHovered ? 10 : 0,
             interactionWidth: 14,
             focusable: false,
           })
@@ -137,6 +156,7 @@ function Canvas({ db, ontology }: { db: string; ontology: Ontology }) {
         if (!centerX.has(parent)) continue
         const active = hl.focusClass === c.iri || hl.focusClass === parent
         const faded = visible !== null && !active
+        const showLabel = !faded && (edgeLabels || active)
         out.push({
           id: `sub:${c.iri}:${parent}`,
           source: c.iri,
@@ -144,7 +164,7 @@ function Canvas({ db, ontology }: { db: string; ontology: Ontology }) {
           sourceHandle: 'sub:out',
           targetHandle: 'sub:in',
           type: 'default',
-          label: faded ? undefined : 'subClassOf',
+          label: showLabel ? 'subClassOf' : undefined,
           labelStyle: { ...label, fill: SUB },
           ...labelBg,
           markerEnd: { type: MarkerType.Arrow, color: SUB, width: 18, height: 18 },
@@ -155,7 +175,7 @@ function Canvas({ db, ontology }: { db: string; ontology: Ontology }) {
       }
     }
     return out
-  }, [nodes, ontology, outgoing, hl, visible])
+  }, [nodes, ontology, outgoing, hl, visible, hovered, edgeLabels])
 
   const traceIds = useMemo(() => [...(hl.now?.classes ?? [])].filter((c) => nodes.some((n) => n.id === c)), [hl, nodes])
   const onMoveStart = useTraceCamera(traceIds)
@@ -173,6 +193,8 @@ function Canvas({ db, ontology }: { db: string; ontology: Ontology }) {
         const d = e.data as { kind: 'objprop'; iri: string } | undefined
         if (d) select(d)
       }}
+      onEdgeMouseEnter={(_, e) => setHovered(e.id)}
+      onEdgeMouseLeave={() => setHovered(null)}
       onPaneClick={() => select(null)}
       onNodeDragStop={onNodeDragStop}
       nodesConnectable={false}

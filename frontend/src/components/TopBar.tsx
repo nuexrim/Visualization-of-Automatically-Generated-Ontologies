@@ -5,11 +5,11 @@ import type { ViewMode } from '../types'
 /** 불러올 수 있는 DB 파일 확장자 */
 export const DB_FILE_ACCEPT = '.dump,.backup,.pgdump,.sql,.sqlite,.sqlite3,.db'
 
-const VIEWS: { id: ViewMode; label: string }[] = [
-  { id: 'erd', label: 'ERD' },
-  { id: 'onto', label: '온톨로지' },
-  { id: 'split', label: '나란히' },
-  { id: 'overlay', label: '겹쳐 보기' },
+const VIEWS: { id: ViewMode; label: string; title: string }[] = [
+  { id: 'erd', label: 'ERD', title: 'DB 구조만 봅니다 (온톨로지 정보 없음)' },
+  { id: 'erd-onto', label: 'ERD + 온톨로지', title: '온톨로지로 더 알게 된 정보(클래스, 속성 라벨·설명, 관계)를 ERD 위에 함께 봅니다' },
+  { id: 'onto', label: '온톨로지', title: '온톨로지 그래프' },
+  { id: 'split', label: '나란히', title: '왼쪽 ERD, 오른쪽 온톨로지' },
 ]
 
 function Stat({ label, value, title }: { label: string; value: number; title: string }) {
@@ -78,6 +78,8 @@ export function TopBar() {
   const selectDb = useStore((s) => s.selectDb)
   const setView = useStore((s) => s.setView)
   const fit = useStore((s) => s.fit)
+  const edgeLabels = useStore((s) => s.edgeLabels)
+  const setEdgeLabels = useStore((s) => s.setEdgeLabels)
   const relayout = useStore((s) => s.relayout)
   const generate = useStore((s) => s.generate)
   const setFilesOpen = useStore((s) => s.setFilesOpen)
@@ -141,7 +143,7 @@ export function TopBar() {
               key={v.id}
               disabled={disabled}
               aria-pressed={view === v.id}
-              title={generating ? '생성 중에는 나란히 보기로 고정됩니다' : disabled ? '온톨로지 파일을 불러오면 사용할 수 있습니다' : undefined}
+              title={generating ? '생성 중에는 나란히 보기로 고정됩니다' : disabled ? '온톨로지 파일을 불러오면 사용할 수 있습니다' : v.title}
               onClick={() => setView(v.id)}
               className={`whitespace-nowrap border-l border-line px-2.5 py-1 text-[12px] first:border-l-0 disabled:cursor-not-allowed disabled:text-slate-400 ${
                 view === v.id ? 'bg-slate-800 text-white' : 'bg-white hover:bg-slate-50 disabled:hover:bg-white'
@@ -182,6 +184,14 @@ export function TopBar() {
         </div>
       )}
       <div className="ml-auto flex items-center gap-1.5 pl-2">
+        <button
+          className={`${btn} ${edgeLabels ? 'border-slate-700 bg-slate-800 text-white hover:bg-slate-700' : ''}`}
+          aria-pressed={edgeLabels}
+          onClick={() => setEdgeLabels(!edgeLabels)}
+          title={edgeLabels ? '모든 선의 이름을 보여주는 중입니다. 누르면 고르거나 마우스를 올린 선만 이름을 보여줍니다.' : '고르거나 마우스를 올린 선만 이름을 보여줍니다. 누르면 모든 선의 이름을 보여줍니다.'}
+        >
+          선 이름
+        </button>
         <button className={btn} onClick={fit}>
           화면에 맞추기
         </button>

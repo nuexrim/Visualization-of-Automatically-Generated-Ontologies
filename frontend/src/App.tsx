@@ -68,7 +68,7 @@ export default function App() {
           {view !== 'onto' && (
             <div className="relative min-w-0 flex-1">
               {view === 'split' && <PaneLabel>ERD</PaneLabel>}
-              <ErdCanvas overlay={view === 'overlay'} />
+              <ErdCanvas withOntology={view === 'erd-onto'} />
               <TraceQuery pane="erd" />
             </div>
           )}

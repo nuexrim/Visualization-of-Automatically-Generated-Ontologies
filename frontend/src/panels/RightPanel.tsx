@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
-import { resolveSelection, useOntologyIndex, type OntologyIndex } from '../links'
-import { useStore } from '../store'
+import { columnKey, resolveSelection, useOntologyIndex, type OntologyIndex } from '../links'
+import { showsOntology, useStore } from '../store'
 import { AddRelation, ClassListEditor, EditableText, TripleEditor, XSD_TYPES } from './EditFields'
 import { GenerationPanel } from './GenerationPanel'
 import type { Entity, Issue, Ontology, Schema, Selection, Table } from '../types'
@@ -62,7 +62,7 @@ function IssueSummary({ ontology }: { ontology: Ontology }) {
   )
 }
 
-function Overview({ schema, ontology }: { schema: Schema; ontology: Ontology | null }) {
+function Overview({ schema, ontology, loaded }: { schema: Schema; ontology: Ontology | null; loaded: boolean }) {
   const select = useStore((s) => s.select)
   return (
     <aside className={`${shell} p-4`}>
@@ -101,8 +101,10 @@ function Overview({ schema, ontology }: { schema: Schema; ontology: Ontology | n
             ))}
           </ul>
         </div>
+      ) : loaded ? (
+        <p className="mt-5 border-t border-line pt-4 text-[12px] text-muted">이 보기는 DB 구조만 보여줍니다. 온톨로지로 더 알게 된 정보는 “ERD + 온톨로지” 보기에서 볼 수 있습니다.</p>
       ) : (
-        <p className="mt-5 border-t border-line pt-4 text-[12px] text-muted">아직 불러온 온톨로지가 없습니다. “온톨로지 생성하기”로 파일을 만든 뒤 불러오면 클래스와 관계가 그래프로 나타납니다.</p>
+        <p className="mt-5 border-t border-line pt-4 text-[12px] text-muted">“온톨로지 생성하기”로 파일을 만든 뒤 불러오면 클래스와 관계를 볼 수 있습니다.</p>
       )}
     </aside>
   )
@@ -141,6 +143,7 @@ function TablePanel({ table, schema, idx, column }: { table: Table; schema: Sche
               </div>
               <div className="text-[12px] leading-snug text-slate-600">{c.description || <span className="text-slate-400">설명 없음</span>}</div>
               {c.value_description && <div className="mt-0.5 whitespace-pre-line rounded bg-slate-50 px-1.5 py-1 text-[11px] leading-snug text-slate-500">{c.value_description}</div>}
+              {idx && <OntoColumnInfo table={table.name} column={c.name} idx={idx} />}
             </li>
           ))}
         </ul>
@@ -160,6 +163,26 @@ function TablePanel({ table, schema, idx, column }: { table: Table; schema: Sche
         </Section>
       ))}
     </aside>
+  )
+}
+
+/** "ERD + 온톨로지" 보기: 컬럼에 대응하는 온톨로지 속성 (라벨, 설명, 코드값 설명). 누르면 그 속성을 고쳐 쓸 수 있다. */
+function OntoColumnInfo({ table, column, idx }: { table: string; column: string; idx: OntologyIndex }) {
+  const select = useStore((s) => s.select)
+  const hit = idx.propByColumn.get(columnKey(table, column))
+  const p = hit && (hit.kind === 'objprop' ? idx.objProp.get(hit.iri) : idx.dataProp.get(hit.iri))
+  if (!hit || !p) return null
+  const comment = p.comments[p.comments.length - 1]
+  return (
+    <button className="mt-1 block w-full rounded border border-onto/25 bg-onto-soft/60 px-1.5 py-1 text-left hover:border-onto/60" onClick={() => select(hit)} title="이 속성 보기·수정">
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-[10px] font-semibold text-onto">◆ {hit.kind === 'objprop' ? '관계' : '속성'}</span>
+        <span className="min-w-0 truncate text-[12px] font-medium text-onto">{p.label || p.name}</span>
+        <span className="ml-auto shrink-0 font-mono text-[10px] text-muted">ont:{p.name}</span>
+      </div>
+      {comment && <div className="text-[11.5px] leading-snug text-slate-600">{comment}</div>}
+      {'value_description' in p && p.value_description && <div className="mt-0.5 whitespace-pre-line text-[11px] leading-snug text-slate-500">{p.value_description}</div>}
+    </button>
   )
 }
 
@@ -387,6 +410,8 @@ export function RightPanel() {
   const selection = useStore((s) => s.selection)
   const gen = useStore((s) => s.gen)
   const idx = useOntologyIndex()
+  // "ERD"(DB만) 보기와 온톨로지를 불러오기 전에는 DB 정보만 보여준다
+  const withOntology = useStore(showsOntology)
   if (!schema) {
     return (
       <aside className={`${shell} p-4`}>
@@ -402,15 +427,15 @@ export function RightPanel() {
   }
   if (gen) return <GenerationPanel gen={gen} />
 
-  const sel = resolveSelection(selection, idx)
-  if (sel && ontology && idx) {
+  const sel = withOntology ? resolveSelection(selection, idx) : selection
+  if (sel && ontology && idx && withOntology) {
     if (sel.kind === 'class') return <ClassPanel iri={sel.iri} ontology={ontology} idx={idx} />
     if (sel.kind === 'objprop' || sel.kind === 'dataprop') return <PropertyPanel sel={sel} ontology={ontology} idx={idx} />
   }
   if (sel?.kind === 'table' || sel?.kind === 'column') {
     const table = schema.tables.find((t) => t.name === sel.table)
-    if (table) return <TablePanel table={table} schema={schema} idx={idx} column={sel.kind === 'column' ? sel.column : undefined} />
+    if (table) return <TablePanel table={table} schema={schema} idx={withOntology ? idx : null} column={sel.kind === 'column' ? sel.column : undefined} />
   }
-  return <Overview schema={schema} ontology={ontology} />
+  return <Overview schema={schema} ontology={withOntology ? ontology : null} loaded={ontology !== null} />
 }
 

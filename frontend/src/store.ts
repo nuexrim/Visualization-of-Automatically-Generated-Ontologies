@@ -32,6 +32,9 @@ interface State {
   gen: GenState | null
   filesOpen: boolean
   notice: Notice | null
+  /** 캔버스의 선 이름을 항상 보여줄지 (기본: 고르거나 마우스를 올린 선만) */
+  edgeLabels: boolean
+  setEdgeLabels: (on: boolean) => void
 
   /** BIRD 예시 질문 (이 DB에 해당하는 것이 있을 때만) */
   questions: Question[]
@@ -125,6 +128,7 @@ export const useStore = create<State>((set, get) => ({
   gen: null,
   filesOpen: false,
   notice: null,
+  edgeLabels: false,
   questions: [],
   chat: null,
   trace: TRACE0,
@@ -321,13 +325,14 @@ export const useStore = create<State>((set, get) => ({
     if (filesOpen) void get().refreshFiles()
   },
   setNotice: (notice) => set({ notice }),
+  setEdgeLabels: (edgeLabels) => set({ edgeLabels }),
 
   ask: async (question, evidence, useEvidence) => {
     const db = get().db
     if (!db || !question.trim() || get().chat?.running) return
     chatAbort = new AbortController()
     // 경로를 보려면 온톨로지와 ERD가 함께 보여야 한다
-    set({ chat: { running: true, question: question.trim(), events: [] }, trace: TRACE0, selection: null, view: get().view === 'overlay' ? 'overlay' : 'split' })
+    set({ chat: { running: true, question: question.trim(), events: [] }, trace: TRACE0, selection: null, view: get().view === 'erd-onto' ? 'erd-onto' : 'split' })
     const push = (e: ChatEvent) => set((s) => (s.chat && s.db === db ? { chat: { ...s.chat, events: [...s.chat.events, e] } } : {}))
     try {
       await api.chat(db, { question, evidence, use_evidence: useEvidence }, push, chatAbort.signal)
@@ -443,9 +448,12 @@ export const useStore = create<State>((set, get) => ({
       const run = await api.run(db, id)
       if (get().db !== db) return
       // 처음 단계부터 재생할 수 있게 첫 단계에 멈춰 둔다
-      set({ chat: { running: false, question: run.question, events: run.events, runId: run.id }, trace: { ...TRACE0, cursor: 0 }, selection: null, view: get().ontology ? (get().view === 'overlay' ? 'overlay' : 'split') : 'erd' })
+      set({ chat: { running: false, question: run.question, events: run.events, runId: run.id }, trace: { ...TRACE0, cursor: 0 }, selection: null, view: get().ontology ? (get().view === 'erd-onto' ? 'erd-onto' : 'split') : 'erd' })
     } catch (e) {
       set({ notice: { kind: 'error', text: `기록을 열지 못했습니다: ${message(e)}` } })
     }
   },
 }))
+
+/** ERD와 오른쪽 패널에 온톨로지 정보를 보여줄지. "ERD" 보기(DB만)와 온톨로지를 불러오기 전에는 DB 정보만 보여준다. */
+export const showsOntology = (s: { view: ViewMode; ontology: Ontology | null; gen: GenState | null }): boolean => s.view !== 'erd' && (s.ontology !== null || s.gen !== null)

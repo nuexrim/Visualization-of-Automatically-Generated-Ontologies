@@ -63,14 +63,15 @@ function ClassNodeImpl({ data, selected }: NodeProps<ClassNodeType>) {
         <div
           key={p.iri}
           style={{ height: ROW }}
-          title={mainComment(p.comments)}
+          title={`ont:${p.name}${mainComment(p.comments) ? ` — ${mainComment(p.comments)}` : ''}`}
           className={`flex cursor-pointer items-center gap-2 border-t border-slate-100 px-3 ${hlProps.includes(p.iri) ? 'bg-amber-100' : 'hover:bg-slate-50'}`}
           onClick={(e) => {
             e.stopPropagation()
             select({ kind: 'dataprop', iri: p.iri })
           }}
         >
-          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px]">{shortPropName(p)}</span>
+          {/* 라벨이 있으면 라벨(사람이 고친 이름이 바로 보이게), 없으면 테이블 접두어를 뗀 IRI 이름 */}
+          {p.label ? <span className="min-w-0 flex-1 truncate text-[11.5px]">{p.label}</span> : <span className="min-w-0 flex-1 truncate font-mono text-[11.5px]">{shortPropName(p)}</span>}
           <span className="shrink-0 font-mono text-[10px] text-muted">{p.ranges[0] ?? ''}</span>
         </div>
       ))}
